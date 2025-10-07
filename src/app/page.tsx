@@ -11,6 +11,7 @@ export default function Home() {
   const [meetingsError, setMeetingsError] = useState<string | null>(null);
   const [connectingCalendar, setConnectingCalendar] = useState(false);
   const [calendarConnected, setCalendarConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<string>("");
 
   const connectGoogleCalendar = async () => {
     setConnectingCalendar(true);
@@ -19,15 +20,52 @@ export default function Home() {
       const data = await res.json();
       
       if (data.success && data.connectionUrl) {
-        // Open the connection URL in a new window
-        window.open(data.connectionUrl, "_blank", "width=600,height=600");
-        setCalendarConnected(true);
-        // Refresh meetings after a short delay
+        setConnectionStatus("Opening authentication window...");
+        
+        // Open the connection URL in a new window with proper dimensions
+        const popup = window.open(
+          data.connectionUrl, 
+          "google-calendar-auth", 
+          "width=600,height=700,scrollbars=yes,resizable=yes"
+        );
+        
+        if (!popup) {
+          setMeetingsError("Popup blocked. Please allow popups for this site and try again.");
+          setConnectionStatus("");
+          return;
+        }
+
+        setConnectionStatus("Please complete the Google Calendar authorization in the popup window...");
+
+        // Monitor the popup window for closure (fallback)
+        const checkClosed = setInterval(() => {
+          if (popup.closed) {
+            clearInterval(checkClosed);
+            setConnectingCalendar(false);
+            console.log('Popup closed, checking for connection...');
+            // Always try to fetch meetings when popup closes
+            setConnectionStatus("Popup closed. Checking connection...");
+            setTimeout(() => {
+              fetchMeetings();
+              setConnectionStatus("");
+            }, 2000);
+          }
+        }, 1000);
+
+        // Set a timeout to close the popup after 5 minutes
         setTimeout(() => {
-          fetchMeetings();
-        }, 2000);
+          if (!popup.closed) {
+            popup.close();
+            clearInterval(checkClosed);
+            setConnectingCalendar(false);
+            setConnectionStatus("");
+            setMeetingsError("Authentication timed out. Please try again.");
+          }
+        }, 300000); // 5 minutes
+
       } else {
         setMeetingsError(data.error || "Failed to connect calendar");
+        setConnectionStatus("");
       }
     } catch (e: any) {
       setMeetingsError(e?.message ?? "Failed to connect calendar");
@@ -37,27 +75,37 @@ export default function Home() {
   };
 
   const fetchMeetings = async () => {
+    console.log('fetchMeetings called, status:', status);
     if (status !== "authenticated") {
+      console.log('Not authenticated, skipping fetchMeetings');
       setMeetings(null);
       return;
     }
     setLoadingMeetings(true);
     setMeetingsError(null);
     try {
+      console.log('Fetching meetings...');
       const res = await fetch("/api/meetings");
+      console.log('Meetings response status:', res.status);
       if (!res.ok) {
         const errorData = await res.json();
+        console.log('Meetings error data:', errorData);
         if (errorData.code === "CALENDAR_NOT_CONNECTED") {
           setMeetingsError("Google Calendar not connected");
+          setCalendarConnected(false);
           return;
         }
         throw new Error(errorData.error || `Failed: ${res.status}`);
       }
       const data = await res.json();
+      console.log('Meetings data received:', data);
       setMeetings(data);
       setCalendarConnected(true);
+      setMeetingsError(null); // Clear any previous errors
     } catch (e: any) {
+      console.error('Error fetching meetings:', e);
       setMeetingsError(e?.message ?? "Failed to load meetings");
+      setCalendarConnected(false);
     } finally {
       setLoadingMeetings(false);
     }
@@ -66,6 +114,46 @@ export default function Home() {
   useEffect(() => {
     fetchMeetings();
   }, [status]);
+
+  // Listen for messages from the popup window
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      console.log('Received message:', event.data, 'from origin:', event.origin);
+      console.log('Current origin:', window.location.origin);
+      
+      // Allow messages from same origin or from the callback page
+      if (event.origin !== window.location.origin && 
+          !event.origin.includes('localhost:3000') && 
+          !event.origin.includes('composio')) {
+        console.log('Message rejected due to origin mismatch');
+        return;
+      }
+      
+      if (event.data.type === 'calendar_auth_success') {
+        console.log('Calendar authentication successful');
+        setConnectionStatus("Connection successful! Loading meetings...");
+        setCalendarConnected(true);
+        setConnectingCalendar(false);
+        // Refresh meetings after a short delay
+        setTimeout(() => {
+          fetchMeetings();
+          setConnectionStatus("");
+        }, 1000);
+      } else if (event.data.type === 'calendar_auth_error') {
+        console.error('Calendar authentication failed:', event.data.error);
+        setMeetingsError(`Authentication failed: ${event.data.error}`);
+        setConnectionStatus("");
+        setConnectingCalendar(false);
+      }
+    };
+
+    console.log('Setting up message listener...');
+    window.addEventListener('message', handleMessage);
+    return () => {
+      console.log('Removing message listener...');
+      window.removeEventListener('message', handleMessage);
+    };
+  }, []);
 
   return (
     <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
@@ -116,6 +204,11 @@ export default function Home() {
                     >
                       {connectingCalendar ? "Connecting..." : "Connect Google Calendar"}
                     </button>
+                    {connectionStatus && (
+                      <div className="mt-2 text-sm text-blue-600">
+                        {connectionStatus}
+                      </div>
+                    )}
                   </div>
                 )}
 

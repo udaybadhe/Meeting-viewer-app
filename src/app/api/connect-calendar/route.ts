@@ -35,7 +35,9 @@ export async function POST(req: NextRequest) {
 
   try {
     // Create a connection request for Google Calendar using the Auth Config ID
-    const user_id = uuidv4(); // Use email as user identifier
+    // Reuse existing cookie if present; otherwise generate a new stable identifier
+    const existingCookie = req.cookies.get("composio_user_id")?.value;
+    const user_id = existingCookie || uuidv4();
     const auth_config_id = process.env
       .COMPOSIO_GOOGLECALENDAR_AUTH_CONFIG_ID as string;
 
@@ -43,13 +45,16 @@ export async function POST(req: NextRequest) {
       user_id as string,
       auth_config_id as string,
       {
-        callbackUrl: `http://localhost:3000/`,
+        callbackUrl: `http://localhost:3000/api/composio/callback`,
       }
     );
 
     // Get the connection URL from the redirectUrl property
     const connectionUrl = connectionRequest.redirectUrl;
-    console.log(connectionUrl);
+    console.log("Connection URL:", connectionUrl);
+    console.log("User ID:", user_id);
+    console.log("Auth Config ID:", auth_config_id);
+
     if (!connectionUrl) {
       return NextResponse.json(
         { error: "No connection URL available" },
@@ -57,14 +62,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const connectedAccount = await connectionRequest.waitForConnection();
-    console.log(`Connection Established: ${connectedAccount.id}`);
-    return NextResponse.json({
+    // Don't wait for connection here - let the user complete the OAuth flow first
+    const res = NextResponse.json({
       success: true,
       connectionUrl,
-      message:
-        "Please visit the connection URL to authorize Google Calendar access",
+      connectionId: connectionRequest.id,
+      message: "Please complete the OAuth flow in the popup window",
     });
+
+    // Persist the generated user_id in a cookie so subsequent API calls can use the same identifier
+    // Use a short-ish maxAge; extend as needed
+    res.cookies.set("composio_user_id", user_id, {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30, // 30 days
+    });
+
+    return res;
   } catch (err: any) {
     const status = err?.response?.status;
     const payload = err?.response?.data;

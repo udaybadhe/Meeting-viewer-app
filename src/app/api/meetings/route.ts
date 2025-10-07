@@ -23,6 +23,23 @@ export async function GET(req: NextRequest) {
   const pastWindowStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const futureWindowEnd = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
+  // Resolve the correct identifier to use with Composio:
+  // 1) connected_account_id via env (explicit override)
+  // 2) composio_user_id cookie set during connection initiation
+  // 3) fallback to session email (legacy behavior)
+  const connected_account_id = process.env.COMPOSIO_CONNECTED_ACCOUNT_ID as
+    | string
+    | undefined;
+
+  const cookieUserId = req.cookies.get("composio_user_id")?.value;
+
+  const identifierPayload = connected_account_id
+    ? { connected_account_id }
+    : cookieUserId
+    ? { user_id: cookieUserId }
+    : { user_id: session.user.email as string };
+  console.log("Identifier Payload:", identifierPayload);
+  const user_id = identifierPayload.user_id;
   try {
     if (!process.env.COMPOSIO_API_KEY) {
       return NextResponse.json(
@@ -35,14 +52,8 @@ export async function GET(req: NextRequest) {
       ? { mcpServerId: process.env.COMPOSIO_MCP_SERVER_ID as string }
       : undefined;
 
-    // Execute Google Calendar tool per Composio docs
-    // Prefer a specific connected account if provided; otherwise use user_id
-    const connected_account_id = process.env.COMPOSIO_CONNECTED_ACCOUNT_ID as
-      | string
-      | undefined;
-
     const result = await composio.tools.execute("GOOGLECALENDAR_EVENTS_LIST", {
-      user_id: session.user.email as string, // Use email as user identifier
+      user_id,
       arguments: {
         calendar_id: "primary",
         time_min: pastWindowStart.toISOString(),
@@ -94,6 +105,10 @@ export async function GET(req: NextRequest) {
           error: "Google Calendar not connected",
           code: "CALENDAR_NOT_CONNECTED",
           hint: "Please connect your Google Calendar first.",
+          debug: {
+            usedIdentifier: identifierPayload,
+            hasCookieUserId: Boolean(cookieUserId),
+          },
         },
         { status: 400 }
       );
