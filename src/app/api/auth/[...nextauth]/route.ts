@@ -1,8 +1,8 @@
-import NextAuth from "next-auth";
+import NextAuth, { type NextAuthOptions } from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 
 // NextAuth config for App Router route handler
-export const authOptions = {
+export const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID as string,
@@ -16,7 +16,7 @@ export const authOptions = {
     // Use default pages; can customize later
   },
   callbacks: {
-    async jwt({ token, account, profile }: any) {
+    async jwt({ token, account, profile }) {
       if (account?.provider === "google") {
         token.provider = "google";
       }
@@ -25,9 +25,9 @@ export const authOptions = {
       }
       return token;
     },
-    async session({ session, token }: any) {
+    async session({ session, token }) {
       if (token?.email) {
-        session.user = session.user || ({} as any);
+        session.user = session.user || {};
         session.user.email = token.email as string;
       }
       return session;
